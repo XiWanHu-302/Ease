@@ -1,0 +1,53 @@
+# 本地开发助手协作记录
+/AGENTS.md
+
+# 本地赛题参考资料
+/x/
+
+# Python环境与缓存
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 可重新生成的构建产物、模型和许可证汇总
+/build/
+/dist/
+/output/
+/licenses/
+/models/*.task
+/models/*.download
+/*.spec
+!packaging/zuoban.spec
+
+# 本地记录与配置，保留可共享的配置示例
+/data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-wal
+*.db-shm
+*.log
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# 编辑器和操作系统个人文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

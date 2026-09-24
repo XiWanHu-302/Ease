@@ -1,0 +1,5 @@
+mediapipe
+opencv-contrib-python
+PySide6
+numpy
+psutil
