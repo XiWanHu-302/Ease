@@ -68,3 +68,26 @@ def test_threshold_settings_validate_and_persist(tmp_path, monkeypatch):
     assert window.store.settings()["enter"]["pitch"] == 7.5
     assert window.store.settings()["hold"] == 3
     window.close()
+
+
+def test_calendar_day_details_and_journey_toggle(tmp_path, monkeypatch):
+    from datetime import date
+
+    app = QApplication.instance() or QApplication([])
+    window = Window(tmp_path / "models", tmp_path / "data")
+    assert window.tabs.tabText(1) == "旅程与日历"
+    assert window.store.journey_enabled()
+    sid = window.store.start({"journey_enabled": True})
+    window.store.append(sid, {"t": 0, "states": dict.fromkeys(KEYS, "normal"), "notices": []})
+    window.store.append(sid, {"t": .2, "states": dict.fromkeys(KEYS, "alert"), "notices": ["pitch"]})
+    window.store.finish(sid)
+    window.refresh_reports()
+    assert window.calendar.days[date.today().isoformat()]["active"] > 0
+    assert window.history.rowCount() == 1
+    assert "会话 1 次" in window.day_details.text()
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    window.journey_input.setChecked(False)
+    window.save_settings()
+    assert not window.store.journey_enabled()
+    assert window.history.rowCount() == 1
+    window.close()

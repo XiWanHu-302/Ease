@@ -11,13 +11,16 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTabWidget, QFrame, QGridLayout, QFormLayout, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QSlider, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox)
+    QSlider, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox,
+    QProgressBar, QScrollArea)
 
 from .core import KEYS, LABELS, STATES, Config, Measurement, Calibrator, Engine, load_config
 from .storage import Store
 from .vision import Pipeline
+from .journey import GOALS, STATIONS
+from .ui_journey import JourneyMap, UsageCalendar
 
-COLORS = {"normal": "#16806a", "pending": "#b87516", "alert": "#cf4b4b", "unknown": "#758397", "paused": "#758397"}
+COLORS = {"normal": "#17655D", "pending": "#AD7137", "alert": "#C35E51", "unknown": "#74857F", "paused": "#74857F"}
 
 
 class Tone:
@@ -49,7 +52,7 @@ class Timeline(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#f5f8fb"))
+        painter.fillRect(self.rect(), QColor("#FFFDF8"))
         if not self.rows:
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "选择一次会话查看状态时间线")
             return
@@ -58,9 +61,9 @@ class Timeline(QWidget):
         width = max(1, self.width() - 120)
         for j, key in enumerate(KEYS):
             y = 14 + j * 34
-            painter.setPen(QColor("#334155"))
+            painter.setPen(QColor("#31524B"))
             painter.drawText(8, y + 17, LABELS[key])
-            painter.fillRect(100, y, width, 22, QColor("#e3e9ef"))
+            painter.fillRect(100, y, width, 22, QColor("#E8EAE1"))
             for row, nxt in zip(self.rows, self.rows[1:]):
                 x = 100 + (row["t"] - start) / duration * width
                 span = min(0.5, max(0, nxt["t"] - row["t"])) / duration * width
@@ -86,21 +89,25 @@ class Window(QMainWindow):
         self.last_result = self.last_row = None
         self.last_flush = time.monotonic()
         self.last_expire = 0.0
+        self.last_journey_refresh = 0.0
         self.tone = None
         self.setWindowTitle("坐伴 · 个性化姿态提醒")
-        self.resize(1120, 800)
+        self.resize(1180, 840)
         self.setMinimumSize(900, 680)
         self.setStyleSheet("""
-            QMainWindow, QWidget { background:#f5f8fb; color:#22334a; font-family:'Microsoft YaHei'; font-size:14px; }
+            QMainWindow, QWidget { background:#FAF7F0; color:#29443D; font-family:'Microsoft YaHei'; font-size:14px; }
             QTabWidget::pane { border:0; }
-            QTabBar::tab { padding:12px 28px; background:#e8eef4; margin-right:6px; border-radius:6px; }
-            QTabBar::tab:selected { background:#163b47; color:white; }
-            QPushButton { background:#176a70; color:white; border:0; border-radius:7px; padding:10px 18px; }
-            QPushButton:disabled { background:#c4d0d9; color:#64748b; }
-            QPushButton:hover { background:#24858b; }
-            QSpinBox, QDoubleSpinBox { background:white; padding:7px; border:1px solid #cbd5e1; border-radius:5px; }
-            QTableWidget { background:white; gridline-color:#e4eaf1; }
-            QFrame#card { background:white; border:1px solid #e0e7ef; border-radius:9px; }
+            QTabBar::tab { padding:12px 28px; background:#EEEDE4; margin-right:6px; border-radius:8px; }
+            QTabBar::tab:selected { background:#175C55; color:white; }
+            QPushButton { background:#17655D; color:white; border:0; border-radius:9px; padding:10px 18px; }
+            QPushButton:disabled { background:#D4DAD2; color:#6D7B75; }
+            QPushButton:hover { background:#258076; }
+            QSpinBox, QDoubleSpinBox { background:#FFFDF8; padding:7px; border:1px solid #D8DAD1; border-radius:6px; }
+            QTableWidget, QCalendarWidget { background:#FFFDF8; gridline-color:#E8EAE1; }
+            QCalendarWidget QAbstractItemView { selection-background-color:#17655D; selection-color:white; }
+            QProgressBar { background:#E8EAE1; border:0; border-radius:7px; height:14px; text-align:center; }
+            QProgressBar::chunk { background:#D78968; border-radius:7px; }
+            QFrame#card { background:#FFFDF8; border:1px solid #E2E4DA; border-radius:12px; }
             QFrame#card QLabel { background:transparent; }
         """)
         root = QWidget()
@@ -108,7 +115,7 @@ class Window(QMainWindow):
         layout.setContentsMargins(26, 18, 26, 18)
         title = QLabel("坐伴  /  让专注更自在")
         title.setFont(QFont("Microsoft YaHei", 23, QFont.Weight.Bold))
-        title.setStyleSheet("font-size:26px; font-weight:700; color:#153e49; margin-bottom:4px;")
+        title.setStyleSheet("font-size:26px; font-weight:700; color:#174C45; margin-bottom:4px;")
         layout.addWidget(title)
         layout.addWidget(QLabel("本地处理 · CPU可用 · 默认不保存画面"))
         self.tabs = QTabWidget()
@@ -116,6 +123,7 @@ class Window(QMainWindow):
         self.make_monitor()
         self.make_reports()
         self.make_settings()
+        self.tabs.currentChanged.connect(self.on_tab_changed)
         self.setCentralWidget(root)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -134,7 +142,7 @@ class Window(QMainWindow):
         self.preview = QLabel("摄像头尚未开启\n\n画面只在你的电脑内处理")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setMinimumSize(560, 340)
-        self.preview.setStyleSheet("background:#142a36; color:#c8d9e4; border-radius:10px; font-size:17px;")
+        self.preview.setStyleSheet("background:#173F3D; color:#F5EFE3; border-radius:12px; font-size:17px;")
         body.addWidget(self.preview, 3)
         cards = QVBoxLayout()
         self.cards = {}
@@ -157,6 +165,10 @@ class Window(QMainWindow):
         self.metrics = QLabel("CPU模式  |  低头采用人脸朝向估计；头肩距离仅作实验记录")
         self.metrics.setWordWrap(True)
         layout.addWidget(self.metrics)
+        self.journey_banner = QLabel("")
+        self.journey_banner.setStyleSheet("background:#F9E7D8; color:#77513B; padding:8px; border-radius:8px;")
+        self.journey_banner.hide()
+        layout.addWidget(self.journey_banner)
         controls = QHBoxLayout()
         self.start_button = QPushButton("开启摄像头")
         self.calibrate_button = QPushButton("校准并开始监测")
@@ -180,19 +192,60 @@ class Window(QMainWindow):
         self.stop_button.setEnabled(running)
 
     def make_reports(self):
-        page, layout = QWidget(), QVBoxLayout()
-        page.setLayout(layout)
+        page, outer = QWidget(), QVBoxLayout()
+        page.setLayout(outer)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content, layout = QWidget(), QVBoxLayout()
+        content.setLayout(layout)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+        top = QHBoxLayout()
+        left = QVBoxLayout()
+        title = QLabel("七站陪伴旅程")
+        title.setStyleSheet("font-size:20px; font-weight:700; color:#174C45;")
+        left.addWidget(title)
+        self.journey_map = JourneyMap()
+        left.addWidget(self.journey_map)
+        self.quest = QLabel("")
+        self.quest.setWordWrap(True)
+        left.addWidget(self.quest)
+        self.quest_progress = QProgressBar()
+        left.addWidget(self.quest_progress)
+        left.addWidget(QLabel("完成一站后可以休息；姿态提醒不会扣除旅程进度。"))
+        self.journey_history = QLabel("")
+        self.journey_history.setWordWrap(True)
+        left.addWidget(self.journey_history)
+        top.addLayout(left, 3)
+        right = QVBoxLayout()
+        right.addWidget(QLabel("使用日历  ·  圆点表示使用，菱形表示完成关卡"))
+        self.calendar = UsageCalendar()
+        self.calendar.currentPageChanged.connect(self.refresh_month)
+        self.calendar.selectionChanged.connect(self.show_day)
+        right.addWidget(self.calendar)
+        top.addLayout(right, 2)
+        layout.addLayout(top)
+        self.day_heading = QLabel("")
+        self.day_heading.setStyleSheet("font-size:18px; font-weight:600; color:#174C45;")
+        layout.addWidget(self.day_heading)
+        self.day_details = QLabel("")
+        self.day_details.setWordWrap(True)
+        layout.addWidget(self.day_details)
         self.history = QTableWidget(0, 3)
         self.history.setHorizontalHeaderLabels(["会话", "开始时间（本地）", "完成状态"])
         self.history.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.history.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.history.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.history.itemSelectionChanged.connect(self.show_report)
+        self.history.setMinimumHeight(115)
+        self.history.setMaximumHeight(145)
         layout.addWidget(self.history)
         self.report = QLabel("尚无会话。完成校准后会自动开始记录。")
         self.report.setWordWrap(True)
         layout.addWidget(self.report)
         self.timeline = Timeline()
+        self.timeline.setMaximumHeight(135)
         layout.addWidget(self.timeline)
         layout.addWidget(QLabel("时间线：绿色 正常 / 黄色 待确认 / 红色 持续偏离 / 灰色 无效或暂停"))
         buttons = QHBoxLayout()
@@ -201,7 +254,10 @@ class Window(QMainWindow):
             b.clicked.connect(callback)
             buttons.addWidget(b)
         layout.addLayout(buttons)
-        self.tabs.addTab(page, "会话报告")
+        self.tabs.addTab(page, "旅程与日历")
+        self.refresh_month()
+        self.refresh_journey()
+        self.show_day()
 
     def make_settings(self):
         page = QWidget()
@@ -244,6 +300,9 @@ class Window(QMainWindow):
             self.enter_inputs[key], self.exit_inputs[key] = enter, leave
         form.addRow("声音", self.sound_input)
         form.addRow("音量", self.volume_input)
+        self.journey_input = QCheckBox("显示旅程与关卡奖励")
+        self.journey_input.setChecked(self.store.journey_enabled())
+        form.addRow("趣味功能", self.journey_input)
         layout.addLayout(form)
         save = QPushButton("保存设置（结束当前会话后生效）")
         save.clicked.connect(self.save_settings)
@@ -255,7 +314,7 @@ class Window(QMainWindow):
         clear.clicked.connect(self.clear_data)
         layout.addWidget(clear)
         layout.addStretch()
-        self.tabs.addTab(page, "设置与隐私")
+        self.tabs.addTab(page, "设置")
 
     def start_camera(self):
         if self.pipeline is not None:
@@ -263,6 +322,7 @@ class Window(QMainWindow):
         self.pipeline = Pipeline(self.config.camera, self.model_dir)
         self.seen = 0
         self.last_result = None
+        self.journey_banner.hide()
         self.pipeline.start()
         self.controls(True)
         self.calibrate_button.setEnabled(False)
@@ -361,7 +421,8 @@ class Window(QMainWindow):
             self.status.setText(self.calibrator.message)
             if baseline:
                 self.engine = Engine(baseline, self.config)
-                self.session = self.store.start(self.engine.metadata())
+                self.session = self.store.start({**self.engine.metadata(),
+                                                 "journey_enabled": self.store.journey_enabled()})
                 self.calibrator = None
                 self.pause_button.setEnabled(True)
                 self.calibrate_button.setText("重新校准")
@@ -392,6 +453,10 @@ class Window(QMainWindow):
         if now - self.last_flush > 1:
             self.store.db.commit()
             self.last_flush = now
+        if self.tabs.currentIndex() == 1 and now - self.last_journey_refresh > 1:
+            self.refresh_journey()
+            self.refresh_month()
+            self.last_journey_refresh = now
 
     def render_states(self, result):
         for k, (state, detail) in self.cards.items():
@@ -405,17 +470,81 @@ class Window(QMainWindow):
             return
         row = dict(result, t=t, values=dict(m.values) if m else dict.fromkeys(KEYS),
                    yaw=m.yaw if m else None, ratio=m.ratio if m else None, latency_ms=latency)
-        self.store.append(self.session, row)
+        unlocked = self.store.append(self.session, row)
         self.last_row = row
+        if unlocked:
+            self.journey_banner.setText("今日关卡完成！做得好，记得起身休息。到「旅程与日历」看看新站点。")
+            self.journey_banner.show()
+            self.refresh_reports()
 
     def refresh_reports(self):
-        sessions = self.store.sessions()
+        self.refresh_month()
+        self.refresh_journey()
+        self.show_day()
+
+    def on_tab_changed(self, index):
+        if index == 1:
+            self.refresh_reports()
+
+    def refresh_month(self, *args):
+        self.calendar.days = self.store.month_days(self.calendar.yearShown(), self.calendar.monthShown())
+        self.calendar.updateCells()
+
+    def refresh_journey(self):
+        from datetime import date
+        progress = self.store.journey_progress(date.today().isoformat())
+        enabled = self.store.journey_enabled()
+        count = progress["total_completed"]
+        finished_seventh_today = bool(progress["completed_today"] and progress["completed_today"][1] == len(GOALS))
+        self.journey_map.completed = len(GOALS) if finished_seventh_today else count % len(GOALS)
+        self.journey_map.current = 0 if finished_seventh_today else progress["station"]
+        self.journey_map.enabled = enabled
+        self.journey_map.update()
+        name, story = STATIONS[progress["station"] - 1]
+        if enabled:
+            if progress["completed_today"]:
+                finished_journey, finished_station = progress["completed_today"]
+                message = (f"今天已完成第 {finished_journey} 程 · 第 {finished_station} 站。"
+                           f"下一站「{name}」已解锁：{story} 明天再继续，先休息一下。")
+            else:
+                message = (f"第 {progress['journey']} 程 · 第 {progress['station']} 站「{name}」\n"
+                           f"{story} 今日有效监测 {progress['today_active']/60:.1f} / {progress['goal']} 分钟")
+        else:
+            message = "旅程已关闭。使用日历与会话报告仍可查看。"
+        self.quest.setText(message)
+        if progress["completed_today"]:
+            self.quest_progress.setMaximum(100)
+            self.quest_progress.setValue(100)
+        else:
+            self.quest_progress.setMaximum(progress["goal"] * 60)
+            self.quest_progress.setValue(min(progress["goal"] * 60, int(progress["today_active"])))
+        history = self.store.journey_history()
+        full_journeys = count // len(GOALS)
+        items = "  ·  ".join(f"{day} 第{journey}程第{station}站" for day, journey, station in history[:3])
+        self.journey_history.setText(f"已走完 {full_journeys} 程 · 最近足迹：{items or '尚未解锁关卡'}")
+
+    def show_day(self):
+        day = self.calendar.selectedDate().toString("yyyy-MM-dd")
+        data = self.store.day_summary(day)
+        self.day_heading.setText(f"{day} · 当天记录")
+        self.day_details.setText(
+            f"有效监测 {data['active']/60:.1f} 分钟  ·  会话 {data['sessions']} 次  ·  持续偏离并集 {data['union']/60:.1f} 分钟\n"
+            + "  |  ".join(f"{LABELS[k]}：持续偏离 {data['alerts'][k]/60:.1f} 分钟、提醒 {data['notices'][k]} 次" for k in KEYS))
+        sessions = self.store.day_sessions(day)
+        self.history.blockSignals(True)
         self.history.setRowCount(len(sessions))
         for row, (sid, started, status) in enumerate(sessions):
             values = [str(sid), datetime.fromisoformat(started).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                       {"running": "监测中", "finished": "已结束", "interrupted": "异常中断"}[status]]
             for col, value in enumerate(values):
                 self.history.setItem(row, col, QTableWidgetItem(value))
+        self.history.blockSignals(False)
+        if sessions:
+            self.history.selectRow(0)
+        else:
+            self.report.setText("当天没有会话记录。")
+            self.timeline.rows = []
+            self.timeline.update()
 
     def selected_session(self):
         row = self.history.currentRow()
@@ -465,6 +594,8 @@ class Window(QMainWindow):
             return
         self.config = candidate
         self.store.save_settings(asdict(self.config))
+        self.store.set_journey_enabled(self.journey_input.isChecked())
+        self.refresh_journey()
         QMessageBox.information(self, "设置", "设置已保存。")
 
     def clear_data(self):
