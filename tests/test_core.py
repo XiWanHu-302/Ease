@@ -1,6 +1,6 @@
 import math
 import pytest
-from zuoban.core import Config, Measurement, Engine, Calibrator, KEYS, summarize
+from zuoban.core import Config, Measurement, Engine, Calibrator, KEYS, summarize, load_config
 from zuoban.storage import Store
 
 
@@ -30,7 +30,7 @@ def test_short_motion_does_not_alert():
 def test_three_independent_alerts_and_cooldown():
     rows = advance(engine(), 0, 80, pitch=25, roll=20, shoulder=15)
     notices = [(i / 10, r["notices"]) for i, r in enumerate(rows) if r["notices"]]
-    assert notices == [(10.0, list(KEYS)), (70.0, list(KEYS))]
+    assert notices == [(5.0, list(KEYS)), (65.0, list(KEYS))]
 
 
 def test_head_up_not_head_down():
@@ -94,20 +94,21 @@ def test_timestamp_cannot_go_backwards():
 
 def test_calibration_stable_and_invalid_reset():
     c = Calibrator()
-    for i in range(90):
+    for i in range(50):
         assert c.feed(measurement(i / 10)) is None
-    assert c.feed(measurement(9, shoulder=None)) is None
+    assert c.feed(measurement(5, shoulder=None)) is None
     baseline = None
-    for i in range(91, 193):
+    for i in range(51, 103):
         baseline = c.feed(measurement(i / 10, pitch=2, shoulder=1))
         if baseline:
             break
     assert baseline == dict(pitch=2, roll=0, shoulder=1, yaw=0)
+    assert i == 101
 
 
 def test_calibration_rejects_unstable_sequence():
     c = Calibrator()
-    for i in range(101):
+    for i in range(51):
         result = c.feed(measurement(i / 10, pitch=20 if i % 2 else -20))
     assert result is None
     assert "变化过大" in c.message
@@ -147,3 +148,20 @@ def test_bad_config_rejected():
         Config(hold=-1).validate()
     with pytest.raises(ValueError):
         Config(enter=dict(pitch=1, roll=12, shoulder=8)).validate()
+
+
+def test_old_defaults_migrate_without_overwriting_custom_values():
+    old = dict(camera=1, hold=10.0, sound=False,
+               enter=dict(pitch=15.0, roll=12.0, shoulder=8.0),
+               exit=dict(pitch=10.0, roll=8.0, shoulder=5.0))
+    config, migrated = load_config(old)
+    assert migrated
+    assert config.hold == 5
+    assert config.enter == dict(pitch=10.0, roll=8.0, shoulder=6.0)
+    assert config.exit == dict(pitch=6.0, roll=5.0, shoulder=3.0)
+    assert config.camera == 1 and config.sound is False
+    old["enter"] = dict(pitch=12.0, roll=10.0, shoulder=7.0)
+    old["exit"] = dict(pitch=7.0, roll=6.0, shoulder=4.0)
+    custom, migrated = load_config(old)
+    assert not migrated
+    assert custom.hold == 10.0 and custom.enter == old["enter"]

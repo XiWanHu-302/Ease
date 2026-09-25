@@ -17,15 +17,15 @@ def angle_delta(value, baseline):
 @dataclass
 class Config:
     camera: int = 0
-    hold: float = 10.0
+    hold: float = 5.0
     recovery: float = 3.0
     cooldown: float = 60.0
     smoothing: float = 0.5
     stale: float = 0.5
     sound: bool = True
     volume: int = 40
-    enter: dict = field(default_factory=lambda: dict(pitch=15.0, roll=12.0, shoulder=8.0))
-    exit: dict = field(default_factory=lambda: dict(pitch=10.0, roll=8.0, shoulder=5.0))
+    enter: dict = field(default_factory=lambda: dict(pitch=10.0, roll=8.0, shoulder=6.0))
+    exit: dict = field(default_factory=lambda: dict(pitch=6.0, roll=5.0, shoulder=3.0))
 
     def validate(self):
         if not 0 <= self.camera <= 20 or not 0 <= self.volume <= 100:
@@ -41,6 +41,20 @@ class Config:
         return self
 
 
+def load_config(settings):
+    """将旧版完整默认参数迁到新默认值，保留用户自行调整的参数。"""
+    values = dict(settings)
+    old_enter = dict(pitch=15.0, roll=12.0, shoulder=8.0)
+    old_exit = dict(pitch=10.0, roll=8.0, shoulder=5.0)
+    migrated = (values.get("enter") == old_enter and values.get("exit") == old_exit)
+    if migrated:
+        values["enter"] = Config().enter
+        values["exit"] = Config().exit
+        if values.get("hold") == 10.0:
+            values["hold"] = Config().hold
+    return Config(**values).validate(), migrated
+
+
 @dataclass
 class Measurement:
     timestamp: float
@@ -51,8 +65,8 @@ class Measurement:
 
 
 class Calibrator:
-    """要求连续10秒有效稳定数据；无效或间隔过大即重新积累。"""
-    def __init__(self, duration=10.0):
+    """要求连续5秒有效稳定数据；无效或间隔过大即重新积累。"""
+    def __init__(self, duration=5.0):
         self.duration = duration
         self.samples = []
         self.message = "请面向屏幕，自然坐直，保持脸和双肩完整可见"

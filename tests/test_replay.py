@@ -12,7 +12,7 @@ def test_replay_preserves_database_and_emits_variants(tmp_path):
     engine = Engine(dict(pitch=8, roll=0, shoulder=0, yaw=0), Config())
     sid = store.start(engine.metadata())
     for i in range(151):
-        m = Measurement(i / 10, dict(pitch=20, roll=0, shoulder=0), yaw=0)
+        m = Measurement(i / 10, dict(pitch=17, roll=0, shoulder=0), yaw=0)
         row = dict(engine.update(m), t=m.timestamp, values=m.values, yaw=m.yaw)
         store.append(sid, row)
     store.db.commit()

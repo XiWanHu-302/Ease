@@ -10,10 +10,10 @@ from PySide6.QtCore import Qt, QTimer, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTabWidget, QFrame, QGridLayout, QFormLayout, QSpinBox, QCheckBox,
+    QPushButton, QTabWidget, QFrame, QGridLayout, QFormLayout, QSpinBox, QDoubleSpinBox, QCheckBox,
     QSlider, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox)
 
-from .core import KEYS, LABELS, STATES, Config, Measurement, Calibrator, Engine
+from .core import KEYS, LABELS, STATES, Config, Measurement, Calibrator, Engine, load_config
 from .storage import Store
 from .vision import Pipeline
 
@@ -74,7 +74,9 @@ class Window(QMainWindow):
         self.store = Store(self.data_dir / "zuoban.sqlite3")
         warning = None
         try:
-            self.config = Config(**self.store.settings()).validate()
+            self.config, migrated = load_config(self.store.settings())
+            if migrated:
+                self.store.save_settings(asdict(self.config))
         except (TypeError, ValueError, KeyError):
             self.config = Config()
             warning = "配置无效，已恢复默认设置。"
@@ -96,7 +98,7 @@ class Window(QMainWindow):
             QPushButton { background:#176a70; color:white; border:0; border-radius:7px; padding:10px 18px; }
             QPushButton:disabled { background:#c4d0d9; color:#64748b; }
             QPushButton:hover { background:#24858b; }
-            QSpinBox { background:white; padding:7px; border:1px solid #cbd5e1; border-radius:5px; }
+            QSpinBox, QDoubleSpinBox { background:white; padding:7px; border:1px solid #cbd5e1; border-radius:5px; }
             QTableWidget { background:white; gridline-color:#e4eaf1; }
             QFrame#card { background:white; border:1px solid #e0e7ef; border-radius:9px; }
             QFrame#card QLabel { background:transparent; }
@@ -125,7 +127,7 @@ class Window(QMainWindow):
     def make_monitor(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.status = QLabel("先开启摄像头，再校准10秒。请保证脸和双肩完整入镜。")
+        self.status = QLabel("先开启摄像头，再校准5秒。请保证脸和双肩完整入镜。")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         body = QHBoxLayout()
@@ -219,13 +221,34 @@ class Window(QMainWindow):
         self.volume_input.setValue(self.config.volume)
         form.addRow("摄像头编号", self.camera_input)
         form.addRow("持续偏离后提醒", self.hold_input)
+        self.enter_inputs, self.exit_inputs = {}, {}
+        for key in KEYS:
+            row = QHBoxLayout()
+            enter = QDoubleSpinBox()
+            enter.setRange(0.1, 89.9)
+            enter.setDecimals(1)
+            enter.setSingleStep(0.5)
+            enter.setSuffix("°")
+            enter.setValue(self.config.enter[key])
+            leave = QDoubleSpinBox()
+            leave.setRange(0.1, 89.9)
+            leave.setDecimals(1)
+            leave.setSingleStep(0.5)
+            leave.setSuffix("°")
+            leave.setValue(self.config.exit[key])
+            row.addWidget(QLabel("偏离 ≥"))
+            row.addWidget(enter)
+            row.addWidget(QLabel("恢复 ≤"))
+            row.addWidget(leave)
+            form.addRow(LABELS[key], row)
+            self.enter_inputs[key], self.exit_inputs[key] = enter, leave
         form.addRow("声音", self.sound_input)
         form.addRow("音量", self.volume_input)
         layout.addLayout(form)
         save = QPushButton("保存设置（结束当前会话后生效）")
         save.clicked.connect(self.save_settings)
         layout.addWidget(save)
-        info = QLabel(f"数据位置：{self.data_dir}\n\n默认阈值：低头15° / 歪头12° / 肩线8°。\n这是工程起始参数，不是医学标准。首版尚需真实使用验证。\n\n每次启动或调整机位后重新校准；不自动适应长期偏离姿态。")
+        info = QLabel(f"数据位置：{self.data_dir}\n默认随当前Windows用户自动变化；启动时可用 --data-dir 指定其他目录。\n\n偏离角度按个人校准值计算；恢复角度须小于偏离角度，以减少状态反复跳变。\n默认偏离阈值：低头10° / 歪头8° / 肩线6°。这是待真人验证的工程参数。\n\n每次启动或调整机位后重新校准；不自动适应长期偏离姿态。")
         info.setWordWrap(True)
         layout.addWidget(info)
         clear = QPushButton("清除全部会话记录")
@@ -428,11 +451,19 @@ class Window(QMainWindow):
         if self.pipeline:
             QMessageBox.information(self, "设置", "请先结束当前会话并等待摄像头释放。")
             return
-        self.config.camera = self.camera_input.value()
-        self.config.hold = self.hold_input.value()
-        self.config.sound = self.sound_input.isChecked()
-        self.config.volume = self.volume_input.value()
-        self.config.validate()
+        candidate = Config(**asdict(self.config))
+        candidate.camera = self.camera_input.value()
+        candidate.hold = self.hold_input.value()
+        candidate.sound = self.sound_input.isChecked()
+        candidate.volume = self.volume_input.value()
+        candidate.enter = {key: self.enter_inputs[key].value() for key in KEYS}
+        candidate.exit = {key: self.exit_inputs[key].value() for key in KEYS}
+        try:
+            candidate.validate()
+        except ValueError as error:
+            QMessageBox.warning(self, "设置无效", str(error))
+            return
+        self.config = candidate
         self.store.save_settings(asdict(self.config))
         QMessageBox.information(self, "设置", "设置已保存。")
 

@@ -1,6 +1,6 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from zuoban.ui import Window
 from zuoban.core import Engine, Config, KEYS
 
@@ -46,4 +46,25 @@ def test_calibrate_finishes_old_session(tmp_path):
     assert window.session is None
     assert window.store.sessions()[0][2] == "finished"
     assert not window.pause_button.isEnabled()
+    window.close()
+
+
+def test_threshold_settings_validate_and_persist(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = Window(tmp_path / "models", tmp_path / "data")
+    notices = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: notices.append("saved"))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: notices.append("invalid"))
+    window.enter_inputs["pitch"].setValue(7.5)
+    window.exit_inputs["pitch"].setValue(8.0)
+    window.save_settings()
+    assert notices == ["invalid"]
+    assert window.config.enter["pitch"] == 10.0
+    assert window.store.settings() == {}
+    window.exit_inputs["pitch"].setValue(4.0)
+    window.hold_input.setValue(3)
+    window.save_settings()
+    assert notices[-1] == "saved"
+    assert window.store.settings()["enter"]["pitch"] == 7.5
+    assert window.store.settings()["hold"] == 3
     window.close()
