@@ -42,7 +42,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe tools\download_models.py
 ```
 
-模型来自Google官方存储，权重不包含在Git仓库内。下载地址、版本和SHA-256记录见 [模型清单](models/manifest.json)。
+模型来自Google官方存储，权重不包含在Git仓库内。下载脚本会按[模型清单](models/manifest.json)中的文件大小和SHA-256校验已有或新下载的模型；校验失败时会提示重新下载。
 
 ### 3. 启动应用
 
